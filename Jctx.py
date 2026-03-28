@@ -1,10 +1,10 @@
 """
-Jmap.py  -  Java Project Context Mapper
-=======================================
+Jctx.py  -  Java Context Extractor
+==============================
 
 USAGE
-  python Jmap.py  <project_folder> [flags]
-  Jmap.bat        <project_folder> [flags]
+  python Jctx.py <project_folder> [flags]
+  Jctx.bat       <project_folder> [flags]
 
 FLAGS
   --no-tree   Skip the file-tree section from the output.
@@ -15,19 +15,19 @@ FLAGS CAN BE COMBINED
   --no-tree --print     Both at once, no problem.
 
 EXAMPLES
-  Jmap.bat "Tic Tac Toe"
+  Jctx.bat "Tic Tac Toe"
       Full report saved to:  Tic Tac Toe\\context.txt
 
-  Jmap.bat "Tic Tac Toe" --no-tree
+  Jctx.bat "Tic Tac Toe" --no-tree
       Same report but without the file-tree section.
 
-  Jmap.bat "Tic Tac Toe" --print
+  Jctx.bat "Tic Tac Toe" --print
       Full report printed to the console AND saved to file.
 
-  Jmap.bat "Tic Tac Toe" --no-tree --print
+  Jctx.bat "Tic Tac Toe" --no-tree --print
       No file tree, printed to console AND saved to file.
 
-  Jmap.bat --help
+  Jctx.bat --help
       Show this help page.
 
 OUTPUT FILE
@@ -44,9 +44,9 @@ import os
 import re
 from datetime import datetime
 
-# ============================================================
+# ===================================================
 # CONSTANTS
-# ============================================================
+# ===================================================
 
 SKIP_DIRS = {
     'build', 'target', 'out', 'bin', 'dist', 'output',
@@ -96,17 +96,17 @@ DIVIDER = '=' * 64
 SUBDIV  = '-' * 64
 
 
-# ============================================================
+# ===================================================
 # HELP
-# ============================================================
+# ===================================================
 
 def print_help():
     print(__doc__)
 
 
-# ============================================================
+# ===================================================
 # FILE TREE
-# ============================================================
+# ===================================================
 
 def should_skip_dir(name):
     return name.startswith('.') or name.lower() in SKIP_DIRS
@@ -153,9 +153,9 @@ def _recurse_tree(directory, prefix, result):
             _recurse_tree(full, prefix + (BLANK if is_last else PIPE), result)
 
 
-# ============================================================
+# ===================================================
 # JAVA PARSER
-# ============================================================
+# ===================================================
 
 def strip_modifiers(tokens):
     """
@@ -477,9 +477,9 @@ def parse_java_file(path):
     return {'classes': classes}
 
 
-# ============================================================
+# ===================================================
 # FILE COLLECTORS
-# ============================================================
+# ===================================================
 
 def collect_java_files(project_dir):
     result = []
@@ -501,9 +501,9 @@ def find_pom_files(project_dir):
     return result
 
 
-# ============================================================
+# ===================================================
 # TXT RENDERER
-# ============================================================
+# ===================================================
 
 def _format_field(f):
     parts = []
@@ -527,7 +527,7 @@ def render_txt(project_dir, java_files, pom_files, show_tree):
         active_flags.append('--no-tree')
 
     w(DIVIDER)
-    w(' JMAP - Java Project Context Mapper')
+    w(' JCTX - Java Context Extractor')
     w(f' Project : {project_dir}')
     w(f' Date    : {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
     w(f' Java    : {len(java_files)} file(s)   |   POM: {len(pom_files)} file(s)')
@@ -627,9 +627,9 @@ def render_txt(project_dir, java_files, pom_files, show_tree):
     return '\n'.join(out)
 
 
-# ============================================================
+# ===================================================
 # MAIN
-# ============================================================
+# ===================================================
 
 def main():
     args = sys.argv[1:]
@@ -664,7 +664,7 @@ def main():
 
     print()
     print(DIVIDER)
-    print(' Java Project Extractor')
+    print(' JCTX - Java Context Extractor')
     print(DIVIDER)
     print(f'  Project    : {project}')
     print(f'  Output     : {out_file}')
