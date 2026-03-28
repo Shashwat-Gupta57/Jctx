@@ -117,7 +117,7 @@ Paste it. Ask your question. Get useful answers.
 
 **One-time Setup:**
 
-1. Download this repo (green **Code** button → Download ZIP)
+1. Download The Latest **Release** Zip.
 2. Unzip it
 3. Right-click `Setup.bat` → **Run as administrator**
 4. Open a new terminal
