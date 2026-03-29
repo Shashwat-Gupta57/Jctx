@@ -1,15 +1,15 @@
 ![Demo GIF](./JctxSample.gif)
-# Jctx — Give AI full understanding of your Java codebase
+# Jctx — Give AI full understanding of your Java & Kotlin codebase
 
 **Stop pasting files. Get real architecture-aware answers.**
 
 **Generate complete project context in seconds.**
 
-**Turn any Java project into a single AI-ready `context.txt` in seconds.**
+**Turn any Java or Kotlin project into a single AI-ready `context.txt` (or `context.md`) in seconds.**
 
 ```
 Jctx "C:\projects\MyApp"
-→  context.txt written  (39 files, 12 classes, 247 methods)
+→  context.txt written  (Java: 39 files | Kotlin: 12 files | POM: 1 file | Gradle: 1 file)
 ```
 
 No config. No dependencies. Just Python and a folder.
@@ -18,7 +18,7 @@ No config. No dependencies. Just Python and a folder.
 
 ## Why it exists
 
-You're working on a Java project. You open an AI chat to get help. Before you can even ask your question, you spend 10 minutes copy-pasting files, explaining your class structure, summarising what each module does.
+You're working on a Java or Kotlin project. You open an AI chat to get help. Before you can even ask your question, you spend 10 minutes copy-pasting files, explaining your class structure, summarising what each module does.
 
 **Before:**
 ChatGPT suggests random classes
@@ -28,7 +28,7 @@ ChatGPT tells exactly which class to modify and why
 
 **Jctx does all of that in one command.**
 
-It scans your project and writes a clean, structured `context.txt` — every class, every field, every method signature, every Javadoc comment — formatted so an AI can immediately understand your entire codebase.
+It scans your project and writes a clean, structured `context.txt` (or `context.md`) — every class, every field, every method signature, every Javadoc/KDoc comment, and your build files — formatted so an AI can immediately understand your entire codebase.
 
 Paste it. Ask your question. Get useful answers.
 
@@ -37,87 +37,69 @@ Paste it. Ask your question. Get useful answers.
 ## Output (real example)
 
 <details>
-<summary>Click to expand sample context.txt</summary>
+<summary>Click to expand sample context.md (Markdown Mode)</summary>
+
+```markdown
+# JCTX v1.1.0 — Context Report
+
+- **Project:** `C:\projects\Talken`
+- **Date:** 2026-03-30 14:22:01
+- **Files:** **Java:** 39 file(s) · **Kotlin:** 5 file(s) · **POM:** 1 file(s) · **Gradle:** 1 file(s)
+
+---
+
+## 1. Project File Tree
 
 ```
-================================================================
- JCTX - Java Context Extractor
- Project : C:\projects\Talken
- Date    : 2026-03-28 14:22:01
- Java    : 39 file(s)   |   POM: 1 file(s)
-================================================================
+Talken\
+├── src\
+│   └── main\
+│       ├── java\
+│       │   └── org\
+│       │       └── flexstudios\
+│       │           └── talken\
+│       │               ├── Controls.java
+│       │               └── TalkenClient.java
+│       └── kotlin\
+│           └── org\
+│               └── flexstudios\
+│                   └── talken\
+│                       └── UserProfile.kt
+├── build.gradle
+└── pom.xml
+```
 
-================================================================
- SECTION 1 - PROJECT FILE TREE
-================================================================
+## 2. POM.XML Content
 
-  Talken\
-  ├── src\
-  │   └── main\
-  │       └── java\
-  │           └── org\
-  │               └── flexstudios\
-  │                   └── talken\
-  │                       ├── Controls.java
-  │                       ├── TalkenClient.java
-  │                       ├── MessagingModule.java
-  │                       ├── EncryptionModule.java
-  │                       └── UserProfile.java
-  └── pom.xml
+#### `pom.xml`
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>org.flexstudios</groupId>
+    <artifactId>talken</artifactId>
+    <version>1.0.0</version>
+</project>
+```
 
-================================================================
- SECTION 2 - CLASS AND MEMBER DETAILS
-================================================================
+## 3. Kotlin Class & Member Details
 
-----------------------------------------------------------------
-  FILE: src\main\java\org\flexstudios\talken\UserProfile.java
-----------------------------------------------------------------
+#### 📄 `src\main\kotlin\org\flexstudios\talken\UserProfile.kt`
 
-  CLASS: UserProfile
+### Class: `UserProfile`
+> Represents the user's local profile settings.
 
-  DATA MEMBERS:
-    · private String displayName
-    · private String email
-    · private String aboutSection
-    · private String profilePfpID
-    · private int version
+**Data Members:**
 
-  METHODS:
-    [1] void setDisplayName(String s)
-         DOC: (no documentation)
+| Access | Modifiers | Type | Name | Comment |
+|--------|-----------|------|------|---------|
+| private | val | `String` | `displayName` | |
+| private | val | `String` | `email` | |
 
-    [2] String getDisplayName()
-         DOC: (no documentation)
+**Methods:**
 
-    [3] void setEmail(String email)
-         DOC: (no documentation)
-
-    [4] String getAboutSection()
-         DOC: (no documentation)
-
-    [5] int getVersion()
-         DOC: (no documentation)
-
-----------------------------------------------------------------
-  FILE: src\main\java\org\flexstudios\talken\MessagingModule.java
-----------------------------------------------------------------
-
-  CLASS: MessagingModule
-
-  DATA MEMBERS:
-    · private static final int port
-    · private static EventLoopGroup bossGroup
-    · private static boolean isRunning
-
-  METHODS:
-    [1] void start(String ip)
-         DOC: (no documentation)
-
-    [2] CompletableFuture<Boolean> askRUO(InetSocketAddress recipient)
-         DOC: (no documentation)
-
-    [3] void sendMessage(String message, InetSocketAddress recipient)
-         DOC: (no documentation)
+1. `String getAboutSection()`
+   - *(no documentation)*
 ```
 
 </details>
@@ -126,8 +108,13 @@ Paste it. Ask your question. Get useful answers.
 
 ## Install (Windows)
 
-**One-time Setup:**
+**Option 1: Chocolatey (Recommended)**
+```powershell
+choco install jctx
+```
+The `Jctx` command will be instantly available in your PATH.
 
+**Option 2: Manual Download**
 1. Download The Latest **Release** Zip.
 2. Unzip it
 3. Right-click `Setup.bat` → **Run as administrator**
@@ -148,23 +135,25 @@ That's it. `context.txt` appears inside your project folder.
 ## Usage
 
 ```
-Jctx <project_folder> [--no-tree] [--print] [--help]
+Jctx <project_folder> [--md] [--no-tree] [--print] [--version] [--help]
 ```
 
 | Flag | Effect |
 |---|---|
 | *(none)* | Saves `context.txt` into your project folder |
+| `--md` | Outputs a cleanly formatted Markdown file (`context.md`) instead of plain text |
 | `--no-tree` | Skips the file tree section (shorter output) |
 | `--print` | Also prints to the console |
+| `--version` | Shows the Jctx version |
 | `--help` | Shows help |
 
 ---
 
 ## How to use the output
 
-Paste `context.txt` into any AI chat and ask your question:
+Paste `context.txt` (or the contents of `context.md`) into any AI chat and ask your question:
 
-> *"Here's my Java project structure: [paste]. I want to refactor the messaging module to use WebSockets — where should I start?"*
+> *"Here's my Java/Kotlin project structure: [paste]. I want to refactor the messaging module to use WebSockets — where should I start?"*
 
 Works great with **Claude**, **ChatGPT**, **Gemini**, and any other AI that accepts long text input.
 
@@ -175,12 +164,12 @@ Works great with **Claude**, **ChatGPT**, **Gemini**, and any other AI that acce
 | What | Detail |
 |---|---|
 | File tree | Full project structure, build folders excluded |
-| Classes | Name + Javadoc |
-| Fields | Type, name, access modifier, inline comments |
-| Methods | Numbered list — return type, name, params, Javadoc |
-| pom.xml | Full content if present |
+| Build Files | Full content of your `pom.xml`, `build.gradle`, and `build.gradle.kts` |
+| Classes | Java classes/interfaces/enums and Kotlin classes/data classes/objects/interfaces + Javadoc/KDoc |
+| Fields | Type, name, access modifier, val/var (Kotlin), inline comments |
+| Methods | Numbered list — return type, name, params, Javadoc/KDoc and top-level Kotlin functions |
 
-**Auto-ignored:** `build/`, `target/`, `.idea/`, `.git/`, `node_modules/`, `.class`, `.jar`, and all other build artifacts.
+**Auto-ignored:** `build/`, `target/`, `.idea/`, `.git/`, `node_modules/`, `.gradle/`, `.class`, `.jar`, and all other build artifacts.
 
 ---
 
@@ -193,10 +182,11 @@ Works great with **Claude**, **ChatGPT**, **Gemini**, and any other AI that acce
 
 ## Roadmap
 
-- [ ] Kotlin support
-- [ ] Markdown output mode (`context.md`)
-- [ ] Multi-language projects (mixed Java + Kotlin)
+- [x] Kotlin support
+- [x] Markdown output mode (`context.md`)
+- [ ] Multi-language project estimations (mixed Java + Kotlin percentages)
 - [ ] Token count estimate alongside output
+- [ ] Cross-platform packaging (Homebrew / pip)
 
 ---
 
