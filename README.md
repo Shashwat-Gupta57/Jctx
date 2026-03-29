@@ -20,6 +20,12 @@ No config. No dependencies. Just Python and a folder.
 
 You're working on a Java project. You open an AI chat to get help. Before you can even ask your question, you spend 10 minutes copy-pasting files, explaining your class structure, summarising what each module does.
 
+**Before:**
+ChatGPT suggests random classes
+
+**After:**
+ChatGPT tells exactly which class to modify and why
+
 **Jctx does all of that in one command.**
 
 It scans your project and writes a clean, structured `context.txt` — every class, every field, every method signature, every Javadoc comment — formatted so an AI can immediately understand your entire codebase.
