@@ -39,7 +39,7 @@ Paste it. Ask your question. Get useful answers.
 <details>
 <summary>Click to expand sample context.md (Markdown Mode)</summary>
 
-```markdown
+````markdown
 # JCTX v1.1.0 — Context Report
 
 - **Project:** `C:\projects\Talken`
@@ -100,7 +100,7 @@ Talken\
 
 1. `String getAboutSection()`
    - *(no documentation)*
-```
+````
 
 </details>
 
