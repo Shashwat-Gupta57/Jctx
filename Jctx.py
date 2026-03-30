@@ -7,15 +7,18 @@ USAGE
   Jctx.bat       <project_folder> [flags]
 
 FLAGS
-  --no-tree   Skip the file-tree section from the output.
-  --print     Also print the full report to this console window.
-  --md        Output in Markdown format (context.md instead of context.txt).
-  --version   Show version information and exit.
-  --help  -h  Show this help page and exit.
+  --no-tree     Skip the file-tree section from the output.
+  --print       Also print the full report to this console window.
+  --md          Output in Markdown format (context.md instead of context.txt).
+  --slim        Slim mode: output only class names + method signatures.
+  --clipboard   Copy the output to your clipboard after saving.
+  --version     Show version information and exit.
+  --help  -h    Show this help page and exit.
 
 FLAGS CAN BE COMBINED
-  --no-tree --print     Both at once, no problem.
-  --md --print          Markdown report, also printed.
+  --no-tree --print       Both at once, no problem.
+  --md --print            Markdown report, also printed.
+  --slim --clipboard      Slim report, copied to clipboard.
 
 EXAMPLES
   Jctx.bat "Tic Tac Toe"
@@ -29,6 +32,12 @@ EXAMPLES
 
   Jctx.bat "Tic Tac Toe" --md
       Markdown report saved to:  Tic Tac Toe\\context.md
+
+  Jctx.bat "Tic Tac Toe" --slim
+      Slim report: only class names and method signatures.
+
+  Jctx.bat "Tic Tac Toe" --clipboard
+      Full report saved AND copied to clipboard.
 
   Jctx.bat "Tic Tac Toe" --no-tree --print
       No file tree, printed to console AND saved to file.
@@ -52,13 +61,27 @@ WHAT IS EXTRACTED PER CLASS
 import sys
 import os
 import re
+import platform
+import subprocess
 from datetime import datetime
+
+# ── Ensure UTF-8 console output on Windows ────────────────────
+if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 # ===================================================
 # VERSION
 # ===================================================
 
-VERSION = '1.1.0'
+VERSION = '1.5.0'
 
 # ===================================================
 # CONSTANTS
@@ -142,6 +165,163 @@ KT_SKIP_WORDS = {
     'return', 'throw', 'break', 'continue', 'import', 'package',
     'is', 'as', 'in', 'null', 'true', 'false', 'this', 'super',
 }
+
+
+# ===================================================
+# TOKEN ESTIMATION
+# ===================================================
+
+# Approximate tokens per word for English/code text.
+# Standard ratio is ~1.3 for most LLM tokenizers.
+TOKENS_PER_WORD = 1.3
+
+def estimate_tokens(text):
+    """Estimate LLM token count from text using word-count heuristic."""
+    word_count = len(text.split())
+    return int(word_count * TOKENS_PER_WORD)
+
+
+# AI model context windows (name, token_limit)
+AI_MODELS = [
+    ('Llama 4 Scout',  10_000_000),
+    ('Gemini 3.1',      2_000_000),
+    ('Grok',            2_000_000),
+    ('GPT-5.4',         1_000_000),
+    ('Claude 4.6',      1_000_000),
+    ('Qwen 3',          1_000_000),
+    ('Llama 4 Maverick',1_000_000),
+    ('Kimi K2.5',         256_000),
+    ('Mistral Large 3',   256_000),
+    ('DeepSeek V3',       128_000),
+]
+
+
+def _format_limit(n):
+    """Format a token limit like 1,000,000 → '1M', 256,000 → '256K'."""
+    if n >= 1_000_000:
+        val = n / 1_000_000
+        return f'{val:g}M'
+    elif n >= 1_000:
+        val = n / 1_000
+        return f'{val:g}K'
+    return str(n)
+
+
+def _count_source_tokens(file_list):
+    """Read raw source files and return total estimated tokens."""
+    total = 0
+    for fp in file_list:
+        try:
+            with open(fp, encoding='utf-8', errors='replace') as f:
+                total += estimate_tokens(f.read())
+        except Exception:
+            pass
+    return total
+
+
+def print_language_percentages(java_tokens, kotlin_tokens):
+    """
+    Print language composition percentages to the console.
+    Shows what percentage of source code is Java vs Kotlin.
+    """
+    source_total = java_tokens + kotlin_tokens
+    if source_total == 0:
+        return
+
+    print()
+    print(DIVIDER)
+    print(' LANGUAGE PERCENTAGES')
+    print(DIVIDER)
+
+    entries = []
+    if java_tokens > 0:
+        entries.append(('Java', java_tokens))
+    if kotlin_tokens > 0:
+        entries.append(('Kotlin', kotlin_tokens))
+
+    for lang, tokens in entries:
+        pct = tokens / source_total * 100
+        bar_len = int(pct / 2)   # 50 chars = 100%
+        bar = '█' * bar_len + '░' * (50 - bar_len)
+        print(f'  {lang:8s}: {pct:5.1f}%  {bar}  (~{tokens:,} tokens)')
+
+    print(DIVIDER)
+
+
+def print_token_summary(total_tokens, section_tokens):
+    """
+    Print token estimate and language breakdown to the console.
+
+    section_tokens: dict with keys like 'java', 'kotlin', 'build', 'tree'
+                    and values being estimated token counts.
+    """
+    print()
+    print(DIVIDER)
+    print(' TOKEN ESTIMATE')
+    print(DIVIDER)
+    print(f'  Total tokens : ~{total_tokens:,}')
+    print()
+
+    # Language breakdown
+    if total_tokens > 0:
+        print('  Language Breakdown:')
+        for label, key in [('Java', 'java'), ('Kotlin', 'kotlin'),
+                           ('Build files', 'build'), ('File tree', 'tree')]:
+            t = section_tokens.get(key, 0)
+            if t > 0:
+                pct = t / total_tokens * 100
+                print(f'    {label:12s}: ~{t:>8,}  ({pct:5.1f}%)')
+        print()
+
+    # AI context window fit
+    print('  Context Window Fit:')
+    row = []
+    for name, limit in AI_MODELS:
+        mark = 'Y' if total_tokens <= limit else 'N'
+        short = _format_limit(limit)
+        entry = f'{mark} {name} ({short})'
+        row.append(entry)
+
+    # Print 3 per line
+    for i in range(0, len(row), 3):
+        chunk = row[i:i+3]
+        print('    ' + '   '.join(f'{e:<24s}' for e in chunk))
+
+    print(DIVIDER)
+    print()
+
+
+# ===================================================
+# CLIPBOARD
+# ===================================================
+
+def copy_to_clipboard(text):
+    """Copy text to the system clipboard. Zero dependencies, cross-platform."""
+    system = platform.system()
+    try:
+        if system == 'Windows':
+            process = subprocess.Popen(['clip'], stdin=subprocess.PIPE)
+            process.communicate(text.encode('utf-16-le'))
+        elif system == 'Darwin':
+            process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
+            process.communicate(text.encode('utf-8'))
+        else:
+            # Linux — try xclip, then xsel
+            try:
+                process = subprocess.Popen(
+                    ['xclip', '-selection', 'clipboard'],
+                    stdin=subprocess.PIPE
+                )
+                process.communicate(text.encode('utf-8'))
+            except FileNotFoundError:
+                process = subprocess.Popen(
+                    ['xsel', '--clipboard', '--input'],
+                    stdin=subprocess.PIPE
+                )
+                process.communicate(text.encode('utf-8'))
+        return True
+    except Exception:
+        return False
 
 
 # ===================================================
@@ -920,23 +1100,24 @@ def _format_field(f):
     return line
 
 
-def _render_classes_txt(w, classes, label):
+def _render_classes_txt(w, classes, label, slim=False):
     """Render a list of parsed classes in TXT format."""
     for cls in classes:
         w('')
         w(f'  {label}: {cls["name"]}')
-        if cls['doc']:
+        if not slim and cls['doc']:
             w(f'  DOC  : {cls["doc"]}')
         w('')
 
-        if cls['fields']:
-            w('  DATA MEMBERS:')
-            for fld in cls['fields']:
-                w('    · ' + _format_field(fld))
-            w('')
-        else:
-            w('  DATA MEMBERS: (none found)')
-            w('')
+        if not slim:
+            if cls['fields']:
+                w('  DATA MEMBERS:')
+                for fld in cls['fields']:
+                    w('    · ' + _format_field(fld))
+                w('')
+            else:
+                w('  DATA MEMBERS: (none found)')
+                w('')
 
         if not cls['methods']:
             w('  METHODS: (none found)')
@@ -944,20 +1125,24 @@ def _render_classes_txt(w, classes, label):
         else:
             w('  METHODS:')
             for i, m in enumerate(cls['methods'], 1):
-                sig = f'{m["return"]} {m["name"]}({m["params"]})'
+                ret = m['return']
+                sig = f'{ret} {m["name"]}({m["params"]})' if ret else f'{m["name"]}({m["params"]})'
                 w(f'    [{i}] {sig}')
-                doc = m['doc'] if m['doc'] else '(no documentation)'
-                w(f'         DOC: {doc}')
-                w('')
+                if not slim:
+                    doc = m['doc'] if m['doc'] else '(no documentation)'
+                    w(f'         DOC: {doc}')
+                    w('')
 
 
-def render_txt(project_dir, java_files, kotlin_files, pom_files, gradle_files, show_tree):
+def render_txt(project_dir, java_files, kotlin_files, pom_files, gradle_files, show_tree, slim=False):
     out = []
     w   = out.append
 
     active_flags = []
     if not show_tree:
         active_flags.append('--no-tree')
+    if slim:
+        active_flags.append('--slim')
 
     # ── Stats line  ──────────────────────────────────────────────
     stats_parts = []
@@ -1004,13 +1189,14 @@ def render_txt(project_dir, java_files, kotlin_files, pom_files, gradle_files, s
             w(SUBDIV)
             w(f'  FILE: {rel}')
             w(SUBDIV)
-            w('')
-            try:
-                with open(pom_path, encoding='utf-8', errors='replace') as f:
-                    for line in f:
-                        w('  ' + line.rstrip())
-            except Exception as e:
-                w(f'  [ERROR: {e}]')
+            if not slim:
+                w('')
+                try:
+                    with open(pom_path, encoding='utf-8', errors='replace') as f:
+                        for line in f:
+                            w('  ' + line.rstrip())
+                except Exception as e:
+                    w(f'  [ERROR: {e}]')
             w('')
         section += 1
 
@@ -1026,13 +1212,14 @@ def render_txt(project_dir, java_files, kotlin_files, pom_files, gradle_files, s
             w(SUBDIV)
             w(f'  FILE: {rel}')
             w(SUBDIV)
-            w('')
-            try:
-                with open(gradle_path, encoding='utf-8', errors='replace') as f:
-                    for line in f:
-                        w('  ' + line.rstrip())
-            except Exception as e:
-                w(f'  [ERROR: {e}]')
+            if not slim:
+                w('')
+                try:
+                    with open(gradle_path, encoding='utf-8', errors='replace') as f:
+                        for line in f:
+                            w('  ' + line.rstrip())
+                except Exception as e:
+                    w(f'  [ERROR: {e}]')
             w('')
         section += 1
 
@@ -1060,7 +1247,7 @@ def render_txt(project_dir, java_files, kotlin_files, pom_files, gradle_files, s
                 w('  (no classes found)')
                 continue
 
-            _render_classes_txt(w, result['classes'], 'CLASS')
+            _render_classes_txt(w, result['classes'], 'CLASS', slim=slim)
 
         section += 1
 
@@ -1088,7 +1275,7 @@ def render_txt(project_dir, java_files, kotlin_files, pom_files, gradle_files, s
                 w('  (no classes/objects found)')
                 continue
 
-            _render_classes_txt(w, result['classes'], 'CLASS')
+            _render_classes_txt(w, result['classes'], 'CLASS', slim=slim)
 
         section += 1
 
@@ -1117,27 +1304,28 @@ def _format_field_md(f):
     return f'| {access} | {mods} | `{ftype}` | `{fname}` | {comment} |'
 
 
-def _render_classes_md(w, classes, label):
+def _render_classes_md(w, classes, label, slim=False):
     """Render a list of parsed classes in Markdown format."""
     for cls in classes:
         w('')
         w(f'### {label}: `{cls["name"]}`')
-        if cls['doc']:
+        if not slim and cls['doc']:
             w(f'> {cls["doc"]}')
         w('')
 
-        # Fields table
-        if cls['fields']:
-            w('**Data Members:**')
-            w('')
-            w('| Access | Modifiers | Type | Name | Comment |')
-            w('|--------|-----------|------|------|---------|')
-            for fld in cls['fields']:
-                w(_format_field_md(fld))
-            w('')
-        else:
-            w('**Data Members:** *(none found)*')
-            w('')
+        # Fields table (skip in slim mode)
+        if not slim:
+            if cls['fields']:
+                w('**Data Members:**')
+                w('')
+                w('| Access | Modifiers | Type | Name | Comment |')
+                w('|--------|-----------|------|------|---------|')
+                for fld in cls['fields']:
+                    w(_format_field_md(fld))
+                w('')
+            else:
+                w('**Data Members:** *(none found)*')
+                w('')
 
         # Methods list
         if not cls['methods']:
@@ -1147,14 +1335,16 @@ def _render_classes_md(w, classes, label):
             w('**Methods:**')
             w('')
             for i, m in enumerate(cls['methods'], 1):
-                sig = f'{m["return"]} {m["name"]}({m["params"]})'
+                ret = m['return']
+                sig = f'{ret} {m["name"]}({m["params"]})' if ret else f'{m["name"]}({m["params"]})'
                 w(f'{i}. `{sig}`')
-                doc = m['doc'] if m['doc'] else '*(no documentation)*'
-                w(f'   - {doc}')
+                if not slim:
+                    doc = m['doc'] if m['doc'] else '*(no documentation)*'
+                    w(f'   - {doc}')
             w('')
 
 
-def render_md(project_dir, java_files, kotlin_files, pom_files, gradle_files, show_tree):
+def render_md(project_dir, java_files, kotlin_files, pom_files, gradle_files, show_tree, slim=False):
     out = []
     w   = out.append
 
@@ -1197,14 +1387,15 @@ def render_md(project_dir, java_files, kotlin_files, pom_files, gradle_files, sh
         for pom_path in pom_files:
             rel = pom_path[len(project_dir):].lstrip(os.sep)
             w(f'#### `{rel}`')
-            w('')
-            w('```xml')
-            try:
-                with open(pom_path, encoding='utf-8', errors='replace') as f:
-                    w(f.read().rstrip())
-            except Exception as e:
-                w(f'<!-- ERROR: {e} -->')
-            w('```')
+            if not slim:
+                w('')
+                w('```xml')
+                try:
+                    with open(pom_path, encoding='utf-8', errors='replace') as f:
+                        w(f.read().rstrip())
+                except Exception as e:
+                    w(f'<!-- ERROR: {e} -->')
+                w('```')
             w('')
         section += 1
 
@@ -1214,16 +1405,17 @@ def render_md(project_dir, java_files, kotlin_files, pom_files, gradle_files, sh
         w('')
         for gradle_path in gradle_files:
             rel  = gradle_path[len(project_dir):].lstrip(os.sep)
-            lang = 'kotlin' if gradle_path.endswith('.kts') else 'groovy'
             w(f'#### `{rel}`')
-            w('')
-            w(f'```{lang}')
-            try:
-                with open(gradle_path, encoding='utf-8', errors='replace') as f:
-                    w(f.read().rstrip())
-            except Exception as e:
-                w(f'// ERROR: {e}')
-            w('```')
+            if not slim:
+                lang = 'kotlin' if gradle_path.endswith('.kts') else 'groovy'
+                w('')
+                w(f'```{lang}')
+                try:
+                    with open(gradle_path, encoding='utf-8', errors='replace') as f:
+                        w(f.read().rstrip())
+                except Exception as e:
+                    w(f'// ERROR: {e}')
+                w('```')
             w('')
         section += 1
 
@@ -1247,7 +1439,7 @@ def render_md(project_dir, java_files, kotlin_files, pom_files, gradle_files, sh
                 w('')
                 continue
 
-            _render_classes_md(w, result['classes'], 'Class')
+            _render_classes_md(w, result['classes'], 'Class', slim=slim)
 
         w('---')
         w('')
@@ -1273,7 +1465,7 @@ def render_md(project_dir, java_files, kotlin_files, pom_files, gradle_files, sh
                 w('')
                 continue
 
-            _render_classes_md(w, result['classes'], 'Class')
+            _render_classes_md(w, result['classes'], 'Class', slim=slim)
 
         w('---')
         w('')
@@ -1313,11 +1505,16 @@ def main():
         print(f'[ERROR] Not a directory: {project}')
         sys.exit(1)
 
-    show_tree = '--no-tree' not in flags
-    do_print  = '--print'   in flags
-    do_md     = '--md'      in flags
+    show_tree    = '--no-tree'   not in flags
+    do_print     = '--print'     in flags
+    do_md        = '--md'        in flags
+    do_slim      = '--slim'      in flags
+    do_clipboard = '--clipboard' in flags
 
-    known_flags = {'--no-tree', '--print', '--help', '-h', '--version', '-v', '--md'}
+    known_flags = {
+        '--no-tree', '--print', '--help', '-h', '--version', '-v',
+        '--md', '--slim', '--clipboard',
+    }
     unknown = flags - known_flags
     if unknown:
         print(f'[WARN] Unknown flag(s): {", ".join(sorted(unknown))}')
@@ -1334,6 +1531,8 @@ def main():
     print(f'  Output     : {out_file}')
     print(f'  Format     : {"Markdown" if do_md else "Plain text"}')
     print(f'  File tree  : {"yes" if show_tree else "no  (--no-tree)"}')
+    print(f'  Slim mode  : {"yes (--slim)" if do_slim else "no"}')
+    print(f'  Clipboard  : {"yes (--clipboard)" if do_clipboard else "no"}')
     print(f'  Console    : {"yes (--print)" if do_print else "no"}')
     print(DIVIDER)
     print()
@@ -1357,11 +1556,15 @@ def main():
         print(f'  Gradle files : {len(gradle_files)}')
     print()
 
+    # ── Generate report  ──────────────────────────────────────────
     if do_md:
-        report = render_md(project, java_files, kotlin_files, pom_files, gradle_files, show_tree)
+        report = render_md(project, java_files, kotlin_files, pom_files,
+                           gradle_files, show_tree, slim=do_slim)
     else:
-        report = render_txt(project, java_files, kotlin_files, pom_files, gradle_files, show_tree)
+        report = render_txt(project, java_files, kotlin_files, pom_files,
+                            gradle_files, show_tree, slim=do_slim)
 
+    # ── Save  ─────────────────────────────────────────────────────
     with open(out_file, 'w', encoding='utf-8') as f:
         f.write(report)
 
@@ -1371,7 +1574,42 @@ def main():
 
     print()
     print(f'  Saved to: {out_file}')
-    print()
+
+    # ── Clipboard  ────────────────────────────────────────────────
+    if do_clipboard:
+        if copy_to_clipboard(report):
+            print(f'  Copied to clipboard!')
+        else:
+            print(f'  [WARN] Could not copy to clipboard.')
+
+    # ── Language percentages (always, console only)  ──────────────
+    java_src_tokens   = _count_source_tokens(java_files)   if java_files   else 0
+    kotlin_src_tokens = _count_source_tokens(kotlin_files) if kotlin_files else 0
+
+    print_language_percentages(java_src_tokens, kotlin_src_tokens)
+
+    # ── Token summary (always, console only)  ────────────────────
+    total_tokens = estimate_tokens(report)
+
+    # Break down tokens by section from raw source content.
+    section_tokens = {}
+
+    if show_tree:
+        tree_text = '\n'.join(build_tree_lines(project))
+        section_tokens['tree'] = estimate_tokens(tree_text)
+
+    if java_src_tokens > 0:
+        section_tokens['java'] = java_src_tokens
+
+    if kotlin_src_tokens > 0:
+        section_tokens['kotlin'] = kotlin_src_tokens
+
+    # Build file tokens (POM + Gradle)
+    build_tokens = _count_source_tokens((pom_files or []) + (gradle_files or []))
+    if build_tokens > 0:
+        section_tokens['build'] = build_tokens
+
+    print_token_summary(total_tokens, section_tokens)
 
 
 if __name__ == '__main__':
