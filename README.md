@@ -1,15 +1,15 @@
 ![Demo GIF](./JctxSample-1.8.0.gif)
-# Jctx — Give AI full understanding of your Java & Kotlin codebase
+# Jctx — Give AI full understanding of your Java, Kotlin & Python codebase
 
 **Stop pasting files. Get real architecture-aware answers.**
 
 **Generate complete project context in seconds.**
 
-**Turn any Java or Kotlin project into a single AI-ready `context.txt` (or `context.md`) in seconds.**
+**Turn any Java, Kotlin, or Python project into a single AI-ready `context.txt` (or `context.md`) in seconds.**
 
 ```
 Jctx "C:\projects\MyApp"
-→  context.txt written  (Java: 39 files | Kotlin: 12 files | POM: 1 file | Gradle: 1 file)
+→  context.txt written  (Java: 39 files | Kotlin: 12 files | Python: 15 files | POM: 1 file | Gradle: 1 file)
 ```
 
 No config. No dependencies. Just Python and a folder.
@@ -18,7 +18,7 @@ No config. No dependencies. Just Python and a folder.
 
 ## Why it exists
 
-You're working on a Java or Kotlin project. You open an AI chat to get help. Before you can even ask your question, you spend 10 minutes copy-pasting files, explaining your class structure, summarising what each module does.
+You're working on a Java, Kotlin, or Python project. You open an AI chat to get help. Before you can even ask your question, you spend 10 minutes copy-pasting files, explaining your class structure, summarising what each module does.
 
 **Before:**
 ChatGPT suggests random classes
@@ -43,10 +43,10 @@ Paste it. Ask your question. Get useful answers.
 
 ```text
 ================================================================
- JCTX v1.8.0 - Java & Kotlin Context Extractor
+ JCTX v2.0.0 - Java, Kotlin & Python Context Extractor
  Project : C:\projects\Talken
  Date    : 2026-03-31 12:00:00
- Files   : Java: 39 file(s) | Kotlin: 5 file(s) | POM: 1 file(s) | Gradle: 1 file(s)
+ Files   : Java: 39 file(s) | Kotlin: 5 file(s) | Python: 2 file(s) | POM: 1 file(s) | Gradle: 1 file(s)
 ================================================================
 
 ================================================================
@@ -162,7 +162,7 @@ Jctx <project_folder> [--md] [--slim] [--no-tree] [--clipboard] [--print] [--ver
 
 Paste `context.txt` (or the contents of `context.md`) into any AI chat and ask your question:
 
-> *"Here's my Java/Kotlin project structure: [paste]. I want to refactor the messaging module to use WebSockets — where should I start?"*
+> *"Here's my Java/Kotlin/Python project structure: [paste]. I want to refactor the messaging module to use WebSockets — where should I start?"*
 
 Works great with **Claude**, **ChatGPT**, **Gemini**, and any other AI that accepts long text input.
 
@@ -180,8 +180,9 @@ Shows the exact split of Java vs Kotlin code with a visual progress bar:
 ================================================================
  LANGUAGE PERCENTAGES
 ================================================================
-  Java    :  68.2%  ██████████████████████████████████░░░░░░░░░░░░░░░░  (~23,400 tokens)
-  Kotlin  :  31.8%  ███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  (~10,910 tokens)
+  Java    :  60.2%  ██████████████████████████████░░░░░░░░░░░░░░░░░░░░  (~23,400 tokens)
+  Kotlin  :  28.1%  ██████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  (~10,910 tokens)
+  Python  :  11.7%  █████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  (~ 4,560 tokens)
 ================================================================
 ```
 
@@ -211,10 +212,11 @@ Shows the total token count with a breakdown by section and checks whether your 
   Total tokens : ~34,767
 
   Language Breakdown:
-    Java        : ~  23,400  ( 67.3%)
-    Kotlin      : ~  10,910  ( 31.4%)
+    Java        : ~  23,400  ( 59.5%)
+    Kotlin      : ~  10,910  ( 27.7%)
+    Python      : ~   4,560  ( 11.6%)
     Build files : ~     145  (  0.4%)
-    File tree   : ~     312  (  0.9%)
+    File tree   : ~     312  (  0.8%)
 
   Context Window Fit:
     Y Llama 4 Scout (10M)      Y Gemini 3.1 (2M)          Y Grok (2M)
@@ -258,10 +260,10 @@ When a `.jctxignore` is detected, the console banner shows:
 | What | Detail |
 |---|---|
 | File tree | Full project structure, build folders excluded |
-| Build Files | Full content of your `pom.xml`, `build.gradle`, and `build.gradle.kts` |
-| Classes | Java classes/interfaces/enums and Kotlin classes/data classes/objects/interfaces + Javadoc/KDoc |
-| Fields | Type, name, access modifier, val/var (Kotlin), inline comments |
-| Methods | Numbered list — return type, name, params, Javadoc/KDoc and top-level Kotlin functions |
+| Build Files | Full content of your `pom.xml`, `build.gradle`, `requirements.txt`, and `pyproject.toml` |
+| Classes | Java/Kotlin classes and interfaces, Python classes, plus all docstrings/JavaDocs/KDocs |
+| Fields | Type, name, access modifier, val/var (Kotlin), instance vars (`self.x`), inline comments |
+| Methods | Numbered list — return type, name, params, decorators, top-level Python/Kotlin functions |
 
 **Auto-ignored:** `build/`, `target/`, `.idea/`, `.git/`, `node_modules/`, `.gradle/`, `.class`, `.jar`, and all other build artifacts. Customize further with `.jctxignore`.
 
@@ -283,8 +285,8 @@ When a `.jctxignore` is detected, the console banner shows:
 - [x] Clipboard support and Slim mode
 - [x] Dependency graph (project-internal)
 - [x] `.jctxignore` custom exclusions
-- [ ] Cross-platform packaging (Homebrew / pip)
-- [ ] Python language support
+- [x] Cross-platform packaging (PyPI / pip)
+- [x] Python language support
 - [ ] Architecture diagram generation (`--diagram`)
 
 ---
