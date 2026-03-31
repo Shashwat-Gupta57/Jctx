@@ -1,4 +1,4 @@
-![Demo GIF](./JctxSample.gif)
+![Demo GIF](./JctxSample-1.8.0.gif)
 # Jctx — Give AI full understanding of your Java & Kotlin codebase
 
 **Stop pasting files. Get real architecture-aware answers.**
