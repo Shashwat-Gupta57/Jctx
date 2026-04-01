@@ -90,7 +90,7 @@ if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
 # VERSION
 # ===================================================
 
-VERSION = '1.5.0'
+VERSION = '2.0.0'
 
 # ===================================================
 # CONSTANTS
@@ -278,12 +278,12 @@ def _count_source_tokens(file_list):
     return total
 
 
-def print_language_percentages(java_tokens, kotlin_tokens):
+def print_language_percentages(java_tokens, kotlin_tokens, python_tokens=0):
     """
     Print language composition percentages to the console.
-    Shows what percentage of source code is Java vs Kotlin.
+    Shows what percentage of source code is Java vs Kotlin vs Python.
     """
-    source_total = java_tokens + kotlin_tokens
+    source_total = java_tokens + kotlin_tokens + python_tokens
     if source_total == 0:
         return
 
@@ -297,6 +297,8 @@ def print_language_percentages(java_tokens, kotlin_tokens):
         entries.append(('Java', java_tokens))
     if kotlin_tokens > 0:
         entries.append(('Kotlin', kotlin_tokens))
+    if python_tokens > 0:
+        entries.append(('Python', python_tokens))
 
     for lang, tokens in entries:
         pct = tokens / source_total * 100
@@ -1107,6 +1109,354 @@ def parse_kotlin_file(path):
 
 
 # ===================================================
+# PYTHON PARSER
+# ===================================================
+
+PY_CLASS_RE = re.compile(
+    r'^(\s*)class\s+(\w+)\s*(?:\(([^)]*)\))?\s*:'
+)
+
+PY_FUNC_RE = re.compile(
+    r'^(\s*)def\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*(.+?))?\s*:'
+)
+
+PY_ASSIGN_RE = re.compile(
+    r'^(\w+)\s*(?::\s*([\w\[\], .]+?))?\s*='
+)
+
+PY_SELF_ASSIGN_RE = re.compile(
+    r'^\s*self\.(\w+)\s*(?::\s*([\w\[\], .]+?))?\s*='
+)
+
+PY_DECORATOR_RE = re.compile(r'^(\s*)@([\w.]+)')
+
+PY_SKIP_WORDS = {
+    'if', 'elif', 'else', 'for', 'while', 'try', 'except', 'finally',
+    'with', 'as', 'return', 'yield', 'raise', 'break', 'continue',
+    'pass', 'import', 'from', 'del', 'global', 'nonlocal', 'assert',
+    'True', 'False', 'None', 'and', 'or', 'not', 'in', 'is', 'lambda',
+}
+
+
+def _py_get_access(name):
+    """Infer Python access from naming convention."""
+    if name.startswith('__') and not name.endswith('__'):
+        return 'private'
+    if name.startswith('_'):
+        return 'protected'
+    return ''
+
+
+def _py_inline_comment(raw_line):
+    """Extract inline comment from a Python line (# comment)."""
+    # Simple approach: find # not inside a string
+    in_str = None
+    for i, c in enumerate(raw_line):
+        if c in ('"', "'") and (i == 0 or raw_line[i-1] != '\\'):
+            if in_str is None:
+                in_str = c
+            elif c == in_str:
+                in_str = None
+        elif c == '#' and in_str is None:
+            return raw_line[i + 1:].strip()
+    return ''
+
+
+def _py_join_multiline(raw_lines, start_idx):
+    """
+    If the line at start_idx has unclosed parentheses, join subsequent
+    lines until parens are balanced. Returns (joined_stripped, next_idx).
+    """
+    line = raw_lines[start_idx].rstrip()
+    stripped = line.lstrip()
+    indent = len(line) - len(stripped)
+    depth = stripped.count('(') - stripped.count(')')
+    idx = start_idx + 1
+
+    while depth > 0 and idx < len(raw_lines):
+        next_stripped = raw_lines[idx].strip()
+        stripped += ' ' + next_stripped
+        depth += next_stripped.count('(') - next_stripped.count(')')
+        idx += 1
+
+    return stripped, indent, idx
+
+
+def parse_python_file(path):
+    """
+    Parse a .py file using indentation-based tracking.
+
+    Returns the same dict format as parse_java_file / parse_kotlin_file:
+      {
+        'classes': [
+          {
+            'name':    str,       # class name or '(module)' for top-level
+            'doc':     str,       # docstring
+            'fields':  [ {'access': str, 'mods': [str], 'type': str,
+                          'name': str, 'comment': str} ],
+            'methods': [ {'return': str, 'name': str, 'params': str,
+                          'doc': str} ]
+          }
+        ]
+      }
+
+    Features:
+      - Class declarations (+ inheritance)
+      - Methods inside classes, top-level functions
+      - Docstrings (single-line and multi-line)
+      - Type hints for parameters and return types
+      - Decorators stored as modifiers
+      - self.x = ... extraction from __init__ as instance fields
+      - Class-level variable assignments as class fields
+      - Access inference from underscore conventions
+    """
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            raw_lines = f.readlines()
+    except Exception as e:
+        return {'error': str(e), 'classes': []}
+
+    classes = []
+    module_level = {
+        'name': '(module)',
+        'doc': '',
+        'fields': [],
+        'methods': [],
+    }
+
+    current_class = None
+    class_indent = -1
+
+    pending_decorators = []
+
+    # Docstring state
+    expecting_docstring = False
+    docstring_target_obj = None
+    in_docstring = False
+    docstring_lines = []
+    docstring_quote = ''
+
+    # __init__ tracking for self.x = ...
+    in_init = False
+    init_indent = -1
+
+    # Method body tracking (to avoid capturing method-local vars as class fields)
+    in_method = False
+    method_indent = -1
+
+    i = 0
+    while i < len(raw_lines):
+        raw = raw_lines[i]
+        line = raw.rstrip()
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped) if stripped else 0
+
+        i += 1
+
+        # ── Handle multi-line docstring accumulation ──────────────
+        if in_docstring:
+            if docstring_quote in stripped:
+                end_idx = stripped.index(docstring_quote)
+                if end_idx > 0:
+                    docstring_lines.append(stripped[:end_idx].strip())
+                in_docstring = False
+                doc_text = ' '.join(l for l in docstring_lines if l).strip()
+                if docstring_target_obj is not None:
+                    docstring_target_obj['doc'] = doc_text
+            else:
+                cleaned = stripped.strip()
+                if cleaned:
+                    docstring_lines.append(cleaned)
+            continue
+
+        # ── Skip blank lines ─────────────────────────────────────
+        if not stripped:
+            continue
+
+        # ── Check for docstring start ─────────────────────────────
+        if expecting_docstring:
+            expecting_docstring = False
+            found_doc = False
+            for q in ('"""', "'''"):
+                if stripped.startswith(q):
+                    rest = stripped[3:]
+                    end_idx = rest.find(q)
+                    if end_idx >= 0:
+                        # Single-line docstring: """text"""
+                        doc_text = rest[:end_idx].strip()
+                        if docstring_target_obj is not None:
+                            docstring_target_obj['doc'] = doc_text
+                    else:
+                        # Multi-line docstring starts
+                        in_docstring = True
+                        docstring_quote = q
+                        docstring_lines = [rest.strip()]
+                    found_doc = True
+                    break
+            if found_doc:
+                continue
+            # Not a docstring — fall through to process this line normally
+
+        # ── Skip comments ─────────────────────────────────────────
+        if stripped.startswith('#'):
+            continue
+
+        # ── Check if current class scope ended ────────────────────
+        if current_class is not None and stripped and indent <= class_indent:
+            current_class = None
+            class_indent = -1
+            in_init = False
+            init_indent = -1
+
+        # ── Check if __init__ scope ended ─────────────────────────
+        if in_init and stripped and indent <= init_indent:
+            in_init = False
+            init_indent = -1
+
+        # ── Check if method scope ended ───────────────────────────
+        if in_method and stripped and indent <= method_indent:
+            in_method = False
+            method_indent = -1
+
+        # ── Decorator detection ───────────────────────────────────
+        dec_match = PY_DECORATOR_RE.match(line)
+        if dec_match:
+            pending_decorators.append('@' + dec_match.group(2))
+            continue
+
+        # ── Class detection ───────────────────────────────────────
+        # Handle multi-line: class Foo(\n    Base,\n):
+        if stripped.startswith('class '):
+            if '(' in stripped and ')' not in stripped:
+                stripped, indent, i = _py_join_multiline(raw_lines, i - 1)
+            cls_match = PY_CLASS_RE.match(stripped)
+            if cls_match and indent == 0:
+                cls_name = cls_match.group(2)
+                current_class = {
+                    'name': cls_name,
+                    'doc': '',
+                    'fields': [],
+                    'methods': [],
+                }
+                class_indent = indent
+                classes.append(current_class)
+                expecting_docstring = True
+                docstring_target_obj = current_class
+                in_init = False
+                init_indent = -1
+                pending_decorators = []
+                continue
+
+        # ── Function / method detection ───────────────────────────
+        if stripped.startswith('def '):
+            orig_indent = indent
+            if '(' in stripped and ')' not in stripped:
+                stripped, indent, i = _py_join_multiline(raw_lines, i - 1)
+                indent = orig_indent  # preserve original indent
+            func_match = PY_FUNC_RE.match(stripped)
+            if func_match:
+                func_name = func_match.group(2)
+                params = (func_match.group(3) or '').strip()
+                return_type = (func_match.group(4) or '').strip()
+                if not return_type:
+                    return_type = 'None'
+
+                method_entry = {
+                    'return': return_type,
+                    'name': func_name,
+                    'params': params,
+                    'doc': '',
+                }
+
+                if current_class is not None and orig_indent > class_indent:
+                    current_class['methods'].append(method_entry)
+                    in_method = True
+                    method_indent = orig_indent
+                    if func_name == '__init__':
+                        in_init = True
+                        init_indent = orig_indent
+                    else:
+                        in_init = False
+                        init_indent = -1
+                elif orig_indent == 0:
+                    module_level['methods'].append(method_entry)
+                    in_init = False
+                    init_indent = -1
+                    in_method = False
+                    method_indent = -1
+
+                expecting_docstring = True
+                docstring_target_obj = method_entry
+                pending_decorators = []
+                continue
+
+        # ── self.x = ... inside __init__ ──────────────────────────
+        if in_init and current_class is not None:
+            self_match = PY_SELF_ASSIGN_RE.match(stripped)
+            if self_match:
+                field_name = self_match.group(1)
+                field_type = (self_match.group(2) or '(inferred)').strip()
+                existing_names = {f['name'] for f in current_class['fields']}
+                if field_name not in existing_names:
+                    current_class['fields'].append({
+                        'access': _py_get_access(field_name),
+                        'mods': [],
+                        'type': field_type,
+                        'name': field_name,
+                        'comment': _py_inline_comment(raw.rstrip()),
+                    })
+                continue
+
+        # ── Class-level variable (only at direct class body indent) ──
+        if (current_class is not None and indent > class_indent
+                and not in_init and not in_method):
+            assign_match = PY_ASSIGN_RE.match(stripped)
+            if assign_match and not stripped.startswith('self.'):
+                var_name = assign_match.group(1)
+                var_type = (assign_match.group(2) or '(inferred)').strip()
+                if (var_name not in PY_SKIP_WORDS
+                        and re.match(r'^[A-Za-z_]\w*$', var_name)):
+                    existing_names = {f['name'] for f in current_class['fields']}
+                    if var_name not in existing_names:
+                        current_class['fields'].append({
+                            'access': _py_get_access(var_name),
+                            'mods': ['class'],
+                            'type': var_type,
+                            'name': var_name,
+                            'comment': _py_inline_comment(raw.rstrip()),
+                        })
+                continue
+
+        # ── Module-level variable ─────────────────────────────────
+        if indent == 0 and current_class is None:
+            assign_match = PY_ASSIGN_RE.match(stripped)
+            if assign_match:
+                var_name = assign_match.group(1)
+                var_type = (assign_match.group(2) or '(inferred)').strip()
+                if (var_name not in PY_SKIP_WORDS
+                        and re.match(r'^[A-Za-z_]\w*$', var_name)):
+                    module_level['fields'].append({
+                        'access': '',
+                        'mods': [],
+                        'type': var_type,
+                        'name': var_name,
+                        'comment': _py_inline_comment(raw.rstrip()),
+                    })
+                pending_decorators = []
+                continue
+
+        pending_decorators = []
+
+    # Build result
+    result_classes = []
+    if module_level['fields'] or module_level['methods']:
+        result_classes.append(module_level)
+    result_classes.extend(classes)
+
+    return {'classes': result_classes}
+
+
+# ===================================================
 # FILE COLLECTORS
 # ===================================================
 
@@ -1151,14 +1501,38 @@ def find_gradle_files(project_dir):
     return result
 
 
+def collect_python_files(project_dir):
+    result = []
+    for root, dirs, files in os.walk(project_dir):
+        dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
+        for fname in sorted(files):
+            if fname.endswith('.py') and not should_skip_file(fname):
+                result.append(os.path.join(root, fname))
+    return result
+
+
+def find_python_dep_files(project_dir):
+    """Find Python dependency/config files in the project."""
+    dep_names = {'requirements.txt', 'pyproject.toml', 'setup.py',
+                 'setup.cfg', 'Pipfile'}
+    result = []
+    for root, dirs, files in os.walk(project_dir):
+        dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
+        for fname in sorted(files):
+            if fname in dep_names:
+                result.append(os.path.join(root, fname))
+    return result
+
+
 # ===================================================
 # DEPENDENCY GRAPH
 # ===================================================
 
 IMPORT_RE = re.compile(r'^\s*import\s+(?:static\s+)?([\w.]+)\s*(?:as\s+\w+)?\s*;?\s*$')
+PY_IMPORT_RE = re.compile(r'^\s*(?:from\s+[\w.]+\s+)?import\s+(.+)$')
 
 
-def build_dependency_graph(java_files, kotlin_files):
+def build_dependency_graph(java_files, kotlin_files, python_files=None):
     """
     Build a dependency graph of project-internal class references.
     Scans import statements and cross-references with known project classes.
@@ -1181,12 +1555,20 @@ def build_dependency_graph(java_files, kotlin_files):
         file_classes[fp] = names
         all_classes.update(names)
 
+    for fp in (python_files or []):
+        result = parse_python_file(fp)
+        names = [c['name'] for c in result.get('classes', [])
+                 if c['name'] != '(module)']
+        file_classes[fp] = names
+        all_classes.update(names)
+
     if not all_classes:
         return {}
 
     # Step 2: For each file, scan import statements for project-internal refs
     graph = {}
 
+    # Java + Kotlin imports
     for fp in list(java_files or []) + list(kotlin_files or []):
         classes_in_file = file_classes.get(fp, [])
         if not classes_in_file:
@@ -1210,7 +1592,48 @@ def build_dependency_graph(java_files, kotlin_files):
         for cls_name in classes_in_file:
             existing = set(graph.get(cls_name, []))
             existing.update(deps)
-            existing.discard(cls_name)  # remove self-references
+            existing.discard(cls_name)
+            graph[cls_name] = sorted(existing)
+
+    # Python imports
+    py_from_re = re.compile(r'^\s*from\s+[\w.]+\s+import\s+(.+)$')
+    py_plain_re = re.compile(r'^\s*import\s+(.+)$')
+    for fp in (python_files or []):
+        classes_in_file = file_classes.get(fp, [])
+        if not classes_in_file:
+            continue
+
+        deps = set()
+        try:
+            with open(fp, encoding='utf-8', errors='replace') as f:
+                for line in f:
+                    line_s = line.strip()
+                    # from X import A, B, C  or  from X import A as alias
+                    m = py_from_re.match(line_s)
+                    if m:
+                        imports_part = m.group(1)
+                        for item in imports_part.split(','):
+                            name = item.strip().split(' as ')[0].strip()
+                            name = name.split('.')[-1]
+                            if name and name != '*' and name in all_classes:
+                                deps.add(name)
+                        continue
+                    # import A, B.C
+                    m = py_plain_re.match(line_s)
+                    if m and not line_s.startswith('from '):
+                        imports_part = m.group(1)
+                        for item in imports_part.split(','):
+                            name = item.strip().split(' as ')[0].strip()
+                            name = name.split('.')[-1]
+                            if name and name != '*' and name in all_classes:
+                                deps.add(name)
+        except Exception:
+            pass
+
+        for cls_name in classes_in_file:
+            existing = set(graph.get(cls_name, []))
+            existing.update(deps)
+            existing.discard(cls_name)
             graph[cls_name] = sorted(existing)
 
     return graph
@@ -1287,7 +1710,8 @@ def _render_classes_txt(w, classes, label, slim=False):
                     w('')
 
 
-def render_txt(project_dir, java_files, kotlin_files, pom_files, gradle_files, show_tree, slim=False):
+def render_txt(project_dir, java_files, kotlin_files, pom_files, gradle_files,
+               show_tree, slim=False, python_files=None, python_dep_files=None):
     out = []
     w   = out.append
 
@@ -1303,12 +1727,14 @@ def render_txt(project_dir, java_files, kotlin_files, pom_files, gradle_files, s
         stats_parts.append(f'Java: {len(java_files)} file(s)')
     if kotlin_files:
         stats_parts.append(f'Kotlin: {len(kotlin_files)} file(s)')
+    if python_files:
+        stats_parts.append(f'Python: {len(python_files)} file(s)')
     stats_parts.append(f'POM: {len(pom_files)} file(s)')
     if gradle_files:
         stats_parts.append(f'Gradle: {len(gradle_files)} file(s)')
 
     w(DIVIDER)
-    w(f' JCTX v{VERSION} - Java & Kotlin Context Extractor')
+    w(f' JCTX v{VERSION} - Java, Kotlin & Python Context Extractor')
     w(f' Project : {project_dir}')
     w(f' Date    : {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
     w(f' Files   : {" | ".join(stats_parts)}')
@@ -1432,6 +1858,57 @@ def render_txt(project_dir, java_files, kotlin_files, pom_files, gradle_files, s
 
         section += 1
 
+    # ── Python Dependency Files  ────────────────────────────────
+    if python_dep_files:
+        w('')
+        w(DIVIDER)
+        w(f' SECTION {section} - PYTHON DEPENDENCY FILES')
+        w(DIVIDER)
+        for dep_path in python_dep_files:
+            rel = dep_path[len(project_dir):].lstrip(os.sep)
+            w('')
+            w(SUBDIV)
+            w(f'  FILE: {rel}')
+            w(SUBDIV)
+            if not slim:
+                w('')
+                try:
+                    with open(dep_path, encoding='utf-8', errors='replace') as f:
+                        for line in f:
+                            w('  ' + line.rstrip())
+                except Exception as e:
+                    w(f'  [ERROR: {e}]')
+            w('')
+        section += 1
+
+    # ── Python Classes  ──────────────────────────────────────
+    if python_files:
+        w('')
+        w(DIVIDER)
+        w(f' SECTION {section} - PYTHON CLASS AND MEMBER DETAILS')
+        w(DIVIDER)
+
+        for fp in python_files:
+            rel    = fp[len(project_dir):].lstrip(os.sep)
+            result = parse_python_file(fp)
+
+            w('')
+            w(SUBDIV)
+            w(f'  FILE: {rel}')
+            w(SUBDIV)
+
+            if 'error' in result:
+                w(f'  [ERROR: {result["error"]}]')
+                continue
+
+            if not result['classes']:
+                w('  (no classes/functions found)')
+                continue
+
+            _render_classes_txt(w, result['classes'], 'CLASS', slim=slim)
+
+        section += 1
+
     w('')
     w(DIVIDER)
     w(' END OF REPORT')
@@ -1497,7 +1974,8 @@ def _render_classes_md(w, classes, label, slim=False):
             w('')
 
 
-def render_md(project_dir, java_files, kotlin_files, pom_files, gradle_files, show_tree, slim=False):
+def render_md(project_dir, java_files, kotlin_files, pom_files, gradle_files,
+              show_tree, slim=False, python_files=None, python_dep_files=None):
     out = []
     w   = out.append
 
@@ -1507,6 +1985,8 @@ def render_md(project_dir, java_files, kotlin_files, pom_files, gradle_files, sh
         stats_parts.append(f'**Java:** {len(java_files)} file(s)')
     if kotlin_files:
         stats_parts.append(f'**Kotlin:** {len(kotlin_files)} file(s)')
+    if python_files:
+        stats_parts.append(f'**Python:** {len(python_files)} file(s)')
     stats_parts.append(f'**POM:** {len(pom_files)} file(s)')
     if gradle_files:
         stats_parts.append(f'**Gradle:** {len(gradle_files)} file(s)')
@@ -1624,6 +2104,51 @@ def render_md(project_dir, java_files, kotlin_files, pom_files, gradle_files, sh
         w('')
         section += 1
 
+    # ── Python Dependency Files  ────────────────────────────────
+    if python_dep_files:
+        w(f'## {section}. Python Dependency Files')
+        w('')
+        for dep_path in python_dep_files:
+            rel = dep_path[len(project_dir):].lstrip(os.sep)
+            w(f'#### `{rel}`')
+            if not slim:
+                w('')
+                w('```')
+                try:
+                    with open(dep_path, encoding='utf-8', errors='replace') as f:
+                        w(f.read().rstrip())
+                except Exception as e:
+                    w(f'<!-- ERROR: {e} -->')
+                w('```')
+            w('')
+        section += 1
+
+    # ── Python Classes  ──────────────────────────────────────
+    if python_files:
+        w(f'## {section}. Python Class & Member Details')
+        w('')
+        for fp in python_files:
+            rel    = fp[len(project_dir):].lstrip(os.sep)
+            result = parse_python_file(fp)
+
+            w(f'#### 📄 `{rel}`')
+
+            if 'error' in result:
+                w(f'> ⚠️ ERROR: {result["error"]}')
+                w('')
+                continue
+
+            if not result['classes']:
+                w('*(no classes/functions found)*')
+                w('')
+                continue
+
+            _render_classes_md(w, result['classes'], 'Class', slim=slim)
+
+        w('---')
+        w('')
+        section += 1
+
     w('---')
     w('*End of report.*')
 
@@ -1682,7 +2207,7 @@ def main():
 
     print()
     print(DIVIDER)
-    print(f' JCTX v{VERSION} - Java & Kotlin Context Extractor')
+    print(f' JCTX v{VERSION} - Java, Kotlin & Python Context Extractor')
     print(DIVIDER)
     print(f'  Project    : {project}')
     print(f'  Output     : {out_file}')
@@ -1696,32 +2221,42 @@ def main():
     print(DIVIDER)
     print()
 
-    java_files   = collect_java_files(project)
-    kotlin_files = collect_kotlin_files(project)
-    pom_files    = find_pom_files(project)
-    gradle_files = find_gradle_files(project)
+    java_files       = collect_java_files(project)
+    kotlin_files     = collect_kotlin_files(project)
+    python_files     = collect_python_files(project)
+    pom_files        = find_pom_files(project)
+    gradle_files     = find_gradle_files(project)
+    python_dep_files = find_python_dep_files(project)
 
-    if not java_files and not kotlin_files:
-        print(f'[ERROR] No .java or .kt files found in: {project}')
+    if not java_files and not kotlin_files and not python_files:
+        print(f'[ERROR] No .java, .kt, or .py files found in: {project}')
         sys.exit(1)
 
     if java_files:
         print(f'  Java files   : {len(java_files)}')
     if kotlin_files:
         print(f'  Kotlin files : {len(kotlin_files)}')
+    if python_files:
+        print(f'  Python files : {len(python_files)}')
     if pom_files:
         print(f'  POM files    : {len(pom_files)}')
     if gradle_files:
         print(f'  Gradle files : {len(gradle_files)}')
+    if python_dep_files:
+        print(f'  Py dep files : {len(python_dep_files)}')
     print()
 
     # ── Generate report  ──────────────────────────────────────────
     if do_md:
         report = render_md(project, java_files, kotlin_files, pom_files,
-                           gradle_files, show_tree, slim=do_slim)
+                           gradle_files, show_tree, slim=do_slim,
+                           python_files=python_files,
+                           python_dep_files=python_dep_files)
     else:
         report = render_txt(project, java_files, kotlin_files, pom_files,
-                            gradle_files, show_tree, slim=do_slim)
+                            gradle_files, show_tree, slim=do_slim,
+                            python_files=python_files,
+                            python_dep_files=python_dep_files)
 
     # ── Save  ─────────────────────────────────────────────────────
     with open(out_file, 'w', encoding='utf-8') as f:
@@ -1744,11 +2279,12 @@ def main():
     # ── Language percentages (always, console only)  ──────────────
     java_src_tokens   = _count_source_tokens(java_files)   if java_files   else 0
     kotlin_src_tokens = _count_source_tokens(kotlin_files) if kotlin_files else 0
+    python_src_tokens = _count_source_tokens(python_files) if python_files else 0
 
-    print_language_percentages(java_src_tokens, kotlin_src_tokens)
+    print_language_percentages(java_src_tokens, kotlin_src_tokens, python_src_tokens)
 
     # ── Dependency graph (always, console only)  ─────────────────
-    dep_graph = build_dependency_graph(java_files, kotlin_files)
+    dep_graph = build_dependency_graph(java_files, kotlin_files, python_files)
     print_dependency_graph(dep_graph)
 
     # ── Token summary (always, console only)  ────────────────────
@@ -1767,8 +2303,12 @@ def main():
     if kotlin_src_tokens > 0:
         section_tokens['kotlin'] = kotlin_src_tokens
 
-    # Build file tokens (POM + Gradle)
-    build_tokens = _count_source_tokens((pom_files or []) + (gradle_files or []))
+    if python_src_tokens > 0:
+        section_tokens['python'] = python_src_tokens
+
+    # Build file tokens (POM + Gradle + Python deps)
+    build_tokens = _count_source_tokens(
+        (pom_files or []) + (gradle_files or []) + (python_dep_files or []))
     if build_tokens > 0:
         section_tokens['build'] = build_tokens
 
