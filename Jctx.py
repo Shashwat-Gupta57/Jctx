@@ -363,9 +363,11 @@ def copy_to_clipboard(text):
         if system == 'Windows':
             process = subprocess.Popen(['clip'], stdin=subprocess.PIPE)
             process.communicate(text.encode('utf-16-le'))
+            return process.returncode == 0
         elif system == 'Darwin':
             process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
             process.communicate(text.encode('utf-8'))
+            return process.returncode == 0
         else:
             # Linux — try xclip, then xsel
             try:
@@ -374,13 +376,14 @@ def copy_to_clipboard(text):
                     stdin=subprocess.PIPE
                 )
                 process.communicate(text.encode('utf-8'))
+                return process.returncode == 0
             except FileNotFoundError:
                 process = subprocess.Popen(
                     ['xsel', '--clipboard', '--input'],
                     stdin=subprocess.PIPE
                 )
                 process.communicate(text.encode('utf-8'))
-        return True
+                return process.returncode == 0
     except Exception:
         return False
 
@@ -435,10 +438,10 @@ def _recurse_tree(directory, prefix, result):
     filtered = []
     for entry in entries:
         full = os.path.join(directory, entry)
-        if os.path.isdir(full):
+        if os.path.isdir(full) and not os.path.islink(full):
             if not should_skip_dir(entry):
                 filtered.append((entry, full, True))
-        else:
+        elif os.path.isfile(full) and not os.path.islink(full):
             if not should_skip_file(entry):
                 filtered.append((entry, full, False))
 
@@ -1466,7 +1469,9 @@ def collect_java_files(project_dir):
         dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
         for fname in sorted(files):
             if fname.endswith('.java') and not should_skip_file(fname):
-                result.append(os.path.join(root, fname))
+                full = os.path.join(root, fname)
+                if not os.path.islink(full):
+                    result.append(full)
     return result
 
 
@@ -1476,7 +1481,9 @@ def collect_kotlin_files(project_dir):
         dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
         for fname in sorted(files):
             if fname.endswith('.kt') and not should_skip_file(fname):
-                result.append(os.path.join(root, fname))
+                full = os.path.join(root, fname)
+                if not os.path.islink(full):
+                    result.append(full)
     return result
 
 
@@ -1486,7 +1493,9 @@ def find_pom_files(project_dir):
         dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
         for fname in sorted(files):
             if fname == 'pom.xml':
-                result.append(os.path.join(root, fname))
+                full = os.path.join(root, fname)
+                if not os.path.islink(full):
+                    result.append(full)
     return result
 
 
@@ -1497,7 +1506,9 @@ def find_gradle_files(project_dir):
         dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
         for fname in sorted(files):
             if fname in gradle_names:
-                result.append(os.path.join(root, fname))
+                full = os.path.join(root, fname)
+                if not os.path.islink(full):
+                    result.append(full)
     return result
 
 
@@ -1507,7 +1518,9 @@ def collect_python_files(project_dir):
         dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
         for fname in sorted(files):
             if fname.endswith('.py') and not should_skip_file(fname):
-                result.append(os.path.join(root, fname))
+                full = os.path.join(root, fname)
+                if not os.path.islink(full):
+                    result.append(full)
     return result
 
 
@@ -1520,7 +1533,9 @@ def find_python_dep_files(project_dir):
         dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
         for fname in sorted(files):
             if fname in dep_names:
-                result.append(os.path.join(root, fname))
+                full = os.path.join(root, fname)
+                if not os.path.islink(full):
+                    result.append(full)
     return result
 
 
@@ -1923,14 +1938,11 @@ def render_txt(project_dir, java_files, kotlin_files, pom_files, gradle_files,
 
 def _format_field_md(f):
     """Format a field for a Markdown table row."""
-    access = f['access'] if f['access'] else '-'
-    mods   = ' '.join(f['mods']) if f['mods'] else '-'
-    ftype  = f['type']
-    fname  = f['name']
-    comment = f['comment'] if f['comment'] else ''
-    # Escape pipes in table cells
-    for val in (access, mods, ftype, fname, comment):
-        val = val.replace('|', '\\|')
+    access  = (f['access'] if f['access'] else '-').replace('|', '\\|')
+    mods    = (' '.join(f['mods']) if f['mods'] else '-').replace('|', '\\|')
+    ftype   = f['type'].replace('|', '\\|')
+    fname   = f['name'].replace('|', '\\|')
+    comment = (f['comment'] if f['comment'] else '').replace('|', '\\|')
     return f'| {access} | {mods} | `{ftype}` | `{fname}` | {comment} |'
 
 
