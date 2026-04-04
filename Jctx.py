@@ -363,11 +363,9 @@ def copy_to_clipboard(text):
         if system == 'Windows':
             process = subprocess.Popen(['clip'], stdin=subprocess.PIPE)
             process.communicate(text.encode('utf-16-le'))
-            return process.returncode == 0
         elif system == 'Darwin':
             process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
             process.communicate(text.encode('utf-8'))
-            return process.returncode == 0
         else:
             # Linux — try xclip, then xsel
             try:
@@ -376,14 +374,13 @@ def copy_to_clipboard(text):
                     stdin=subprocess.PIPE
                 )
                 process.communicate(text.encode('utf-8'))
-                return process.returncode == 0
             except FileNotFoundError:
                 process = subprocess.Popen(
                     ['xsel', '--clipboard', '--input'],
                     stdin=subprocess.PIPE
                 )
                 process.communicate(text.encode('utf-8'))
-                return process.returncode == 0
+        return True
     except Exception:
         return False
 
@@ -628,13 +625,12 @@ def parse_java_file(path):
         return {'error': str(e), 'classes': []}
 
     classes          = []
-    current_class    = None
+    class_stack      = []   # list of (class_dict, class_depth)
     in_doc           = False
     doc_lines        = []
     pending_doc      = ''
     in_block_comment = False
     brace_depth      = 0
-    class_depth      = -1   # depth of the class body interior; -1 = no class yet
 
     for raw in raw_lines:
         t        = raw.strip()
@@ -681,14 +677,13 @@ def parse_java_file(path):
         depth_before = brace_depth
         brace_depth += _net_braces(t)
 
+        # ── Pop classes from the stack that have closed  ─────────────
+        while class_stack and class_stack[-1][1] > depth_before:
+            class_stack.pop()
+
         # ── Class / Interface / Enum declaration  ────────────────────
         cm = CLASS_RE.search(t)
         if cm and re.search(r'\b(class|interface|enum)\b', t):
-            # class_depth = the depth INSIDE the class body after this line.
-            # brace_depth is already updated for this line, so:
-            #   public class Foo {   → depth_before=0, brace_depth=1 → class_depth=1
-            # Member lines will have depth_before == class_depth (== 1).
-            class_depth   = brace_depth
             current_class = {
                 'name':    cm.group(1),
                 'doc':     pending_doc,
@@ -696,21 +691,19 @@ def parse_java_file(path):
                 'methods': [],
             }
             classes.append(current_class)
+            class_stack.append((current_class, brace_depth))
             pending_doc = ''
             continue
 
-        # ── No class open yet  ───────────────────────────────────────
-        if current_class is None:
-            pending_doc = ''
-            continue
-
-        # ── Gate: only process direct members of the class  ──────────
+        # ── Gate: only process direct members of the current class  ──
         # A direct member line sits at depth_before == class_depth.
         # (depth_before is the depth before we count the line's own braces,
         #  so a method opening its own { doesn't disqualify itself.)
-        if depth_before != class_depth:
+        if not class_stack or depth_before != class_stack[-1][1]:
             pending_doc = ''
             continue
+
+        current_class = class_stack[-1][0]
 
         # ── Prepare a modifier-stripped version of the line  ─────────
         tokens       = t.split()
@@ -1469,9 +1462,7 @@ def collect_java_files(project_dir):
         dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
         for fname in sorted(files):
             if fname.endswith('.java') and not should_skip_file(fname):
-                full = os.path.join(root, fname)
-                if not os.path.islink(full):
-                    result.append(full)
+                result.append(os.path.join(root, fname))
     return result
 
 
@@ -1481,9 +1472,7 @@ def collect_kotlin_files(project_dir):
         dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
         for fname in sorted(files):
             if fname.endswith('.kt') and not should_skip_file(fname):
-                full = os.path.join(root, fname)
-                if not os.path.islink(full):
-                    result.append(full)
+                result.append(os.path.join(root, fname))
     return result
 
 
@@ -1493,9 +1482,7 @@ def find_pom_files(project_dir):
         dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
         for fname in sorted(files):
             if fname == 'pom.xml':
-                full = os.path.join(root, fname)
-                if not os.path.islink(full):
-                    result.append(full)
+                result.append(os.path.join(root, fname))
     return result
 
 
@@ -1506,9 +1493,7 @@ def find_gradle_files(project_dir):
         dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
         for fname in sorted(files):
             if fname in gradle_names:
-                full = os.path.join(root, fname)
-                if not os.path.islink(full):
-                    result.append(full)
+                result.append(os.path.join(root, fname))
     return result
 
 
@@ -1518,9 +1503,7 @@ def collect_python_files(project_dir):
         dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
         for fname in sorted(files):
             if fname.endswith('.py') and not should_skip_file(fname):
-                full = os.path.join(root, fname)
-                if not os.path.islink(full):
-                    result.append(full)
+                result.append(os.path.join(root, fname))
     return result
 
 
@@ -1533,9 +1516,7 @@ def find_python_dep_files(project_dir):
         dirs[:] = sorted([d for d in dirs if not should_skip_dir(d)])
         for fname in sorted(files):
             if fname in dep_names:
-                full = os.path.join(root, fname)
-                if not os.path.islink(full):
-                    result.append(full)
+                result.append(os.path.join(root, fname))
     return result
 
 
@@ -1938,10 +1919,10 @@ def render_txt(project_dir, java_files, kotlin_files, pom_files, gradle_files,
 
 def _format_field_md(f):
     """Format a field for a Markdown table row."""
-    access  = (f['access'] if f['access'] else '-').replace('|', '\\|')
-    mods    = (' '.join(f['mods']) if f['mods'] else '-').replace('|', '\\|')
-    ftype   = f['type'].replace('|', '\\|')
-    fname   = f['name'].replace('|', '\\|')
+    access = (f['access'] if f['access'] else '-').replace('|', '\\|')
+    mods   = (' '.join(f['mods']) if f['mods'] else '-').replace('|', '\\|')
+    ftype  = f['type'].replace('|', '\\|')
+    fname  = f['name'].replace('|', '\\|')
     comment = (f['comment'] if f['comment'] else '').replace('|', '\\|')
     return f'| {access} | {mods} | `{ftype}` | `{fname}` | {comment} |'
 
