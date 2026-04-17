@@ -28,7 +28,7 @@ ChatGPT tells exactly which class to modify and why
 
 **Jctx does all of that in one command.**
 
-It scans your project and writes a clean, structured `context.txt` (or `context.md`) — every class, every field, every method signature, every Javadoc/KDoc comment, and your build files — formatted so an AI can immediately understand your entire codebase.
+It scans your project and writes a clean, structured `context.txt` (or `context.md`) — every class, every field, every method signature, every Javadoc/KDoc/docstring comment, and your build files — formatted so an AI can immediately understand your entire codebase.
 
 It also provides **Token Count Estimation**, **Language Percentages**, and a **Dependency Graph** — all printed to your console automatically.
 
@@ -43,7 +43,7 @@ Paste it. Ask your question. Get useful answers.
 
 ```text
 ================================================================
- JCTX v2.0.0 - Java, Kotlin & Python Context Extractor
+ JCTX v2.1.0 - Java, Kotlin & Python Context Extractor
  Project : C:\projects\Talken
  Date    : 2026-03-31 12:00:00
  Files   : Java: 39 file(s) | Kotlin: 5 file(s) | Python: 2 file(s) | POM: 1 file(s) | Gradle: 1 file(s)
@@ -174,21 +174,21 @@ After generating the file, Jctx prints a full analytics dashboard to your consol
 
 ### Language Percentages
 
-Shows the exact split of Java vs Kotlin code with a visual progress bar:
+Shows the exact split of Java vs Kotlin vs Python code by lines of code:
 
 ```text
 ================================================================
  LANGUAGE PERCENTAGES
 ================================================================
-  Java    :  60.2%  ██████████████████████████████░░░░░░░░░░░░░░░░░░░░  (~23,400 tokens)
-  Kotlin  :  28.1%  ██████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  (~10,910 tokens)
-  Python  :  11.7%  █████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  (~ 4,560 tokens)
+  Java    :  60.2%  ██████████████████████████████░░░░░░░░░░░░░░░░░░░░  (4,120 lines)
+  Kotlin  :  28.1%  ██████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  (1,920 lines)
+  Python  :  11.7%  █████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  (800 lines)
 ================================================================
 ```
 
 ### Dependency Graph
 
-Automatically maps which of your project classes depend on which (only project-internal references — no external library noise):
+Automatically maps which of your project classes depend on which — scans both import statements and in-body type references (catches same-package dependencies too). Only shows project-internal references, no external library noise:
 
 ```text
 ================================================================
@@ -212,10 +212,10 @@ Shows the total token count with a breakdown by section and checks whether your 
   Total tokens : ~34,767
 
   Language Breakdown:
-    Java        : ~  23,400  ( 59.5%)
-    Kotlin      : ~  10,910  ( 27.7%)
+    Java        : ~  23,400  ( 59.3%)
+    Kotlin      : ~  10,910  ( 27.6%)
     Python      : ~   4,560  ( 11.6%)
-    Build files : ~     145  (  0.4%)
+    Build files : ~     290  (  0.7%)
     File tree   : ~     312  (  0.8%)
 
   Context Window Fit:
