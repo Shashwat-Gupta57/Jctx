@@ -276,6 +276,149 @@ When a `.jctxignore` is detected, the console banner shows:
 
 ---
 
+## GitHub Actions — Automatic Context Reports
+
+Jctx ships with a ready-made GitHub Actions workflow that automatically generates a context report on every push or pull request, saving you from running the tool manually.
+
+### What the workflow does
+
+1. **Checks out** your repository.
+2. **Installs Jctx** from PyPI (with pip caching so repeated runs are fast).
+3. **Runs `jctx`** on your project and prints the analytics dashboard to the Actions log.
+4. **Uploads** the generated `context.md` (or `context.txt`) as a downloadable workflow artifact (retained for 30 days).
+5. **Comments** a preview of the report on the pull request (when triggered by `pull_request`). Subsequent pushes to the same PR update the existing comment instead of creating a new one.
+6. **Optionally commits** the report back to the repository (disabled by default; see configuration below).
+
+---
+
+### Quick start — copy the workflow into your own repository
+
+```bash
+# From the root of your repository:
+mkdir -p .github/workflows
+curl -o .github/workflows/jctx-context-report.yml \
+  https://raw.githubusercontent.com/Shashwat-Gupta57/Jctx/main/.github/workflows/jctx-context-report.yml
+```
+
+Then commit and push. The workflow will run on your next push.
+
+---
+
+### Configuration
+
+All options are controlled via **repository variables** (Settings → Secrets and variables → Variables → New repository variable). No workflow file edits are needed.
+
+| Variable | Default | Description |
+|---|---|---|
+| `JCTX_PROJECT_PATH` | `.` | Path to the project folder to analyse, relative to the repo root. Example: `./my-java-app` |
+| `JCTX_OUTPUT_FORMAT` | `md` | Output format: `md` (Markdown) or `txt` (plain text). |
+| `JCTX_SLIM_MODE` | `false` | Set to `true` to use slim mode (class names + method signatures only). |
+| `JCTX_NO_TREE` | `false` | Set to `true` to omit the file-tree section. |
+| `JCTX_COMMIT_REPORT` | `false` | Set to `true` to automatically commit the report back to the repo (see below). |
+| `JCTX_COMMIT_PATH` | `docs/context-report` | Folder where the committed report is stored (only used when `JCTX_COMMIT_REPORT=true`). |
+
+#### Committing the report back to the repository
+
+To enable automatic commits of the generated report:
+
+1. Set the repository variable `JCTX_COMMIT_REPORT` to `true`.
+2. Add `contents: write` to the workflow permissions (edit the `permissions:` block in the workflow file):
+
+```yaml
+permissions:
+  contents: write        # needed to commit the report
+  pull-requests: write   # needed for PR comments
+```
+
+The commit message is `chore: update Jctx context report [skip ci]` (the `[skip ci]` tag prevents the commit from triggering another workflow run).
+
+#### Required permissions
+
+| Feature | Permission needed |
+|---|---|
+| Artifact upload | *(none — included by default)* |
+| PR comment | `pull-requests: write` *(already set in the workflow)* |
+| Commit report | `contents: write` *(must be added manually if you enable `JCTX_COMMIT_REPORT`)* |
+
+---
+
+### Using the reusable composite action
+
+If you prefer a more modular approach, use the composite action directly in your own workflow:
+
+```yaml
+jobs:
+  context:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate Jctx context report
+        id: jctx
+        uses: Shashwat-Gupta57/Jctx/.github/actions/generate-context@main
+        with:
+          project-path: '.'        # folder to analyse
+          output-format: 'md'      # 'md' or 'txt'
+          slim: 'false'            # 'true' for slim mode
+          no-tree: 'false'         # 'true' to skip file tree
+          # jctx-version: '2.1.0' # pin a specific version (optional)
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: context-report
+          path: ${{ steps.jctx.outputs.report-path }}
+```
+
+**Action inputs**
+
+| Input | Default | Description |
+|---|---|---|
+| `project-path` | `.` | Project folder to analyse. |
+| `output-format` | `md` | `md` or `txt`. |
+| `slim` | `false` | Slim mode (class names + signatures only). |
+| `no-tree` | `false` | Omit file-tree section. |
+| `jctx-version` | *(latest)* | Pin a specific PyPI version of jctx. |
+
+**Action outputs**
+
+| Output | Description |
+|---|---|
+| `report-path` | Path to the generated report file inside the runner workspace. |
+
+---
+
+### More GitHub Actions ideas
+
+Here are additional ways to integrate Jctx (and GitHub Actions in general) to make your workflow even more powerful:
+
+| Idea | How |
+|---|---|
+| **Scheduled context snapshots** | Add a `schedule` trigger (see example below the table) to generate a weekly context report automatically. |
+| **Publish to GitHub Pages** | Use `actions/deploy-pages` to host the latest `context.md` as a browsable site for the project. |
+| **Generate a changelog** | Combine Jctx with tools like [`git-cliff`](https://github.com/orhun/git-cliff) or [`release-drafter`](https://github.com/release-drafter/release-drafter) to auto-create changelogs on release. |
+| **Release automation** | Trigger a release workflow on version-tag pushes (`v*`) that publishes to PyPI or GitHub Releases and attaches the context report as a release asset. |
+| **PR labeling** | Use `actions/labeler` to automatically label PRs based on which files changed (e.g., `java`, `kotlin`, `python`). |
+| **Security scanning** | Add `github/codeql-action` to scan your Java/Kotlin/Python source files for vulnerabilities on every push. |
+| **Dependency review** | Use `actions/dependency-review-action` on PRs to catch newly introduced vulnerable dependencies. |
+| **Issue/PR templates validation** | Enforce PR descriptions with a custom action that checks the PR body against a template. |
+| **Stale issue management** | Use `actions/stale` to automatically close issues and PRs that have been inactive for a configurable number of days. |
+| **Notify on Slack/Discord** | Send a webhook notification with a link to the generated context report artifact after each run. |
+| **Matrix builds** | Run Jctx across multiple project sub-folders in a single workflow using a matrix strategy. |
+
+Example — weekly scheduled run (add to the `on:` block of the workflow):
+
+```yaml
+on:
+  schedule:
+    - cron: '0 0 * * 1'   # every Monday at midnight UTC
+  push:
+    branches: ['**']
+  workflow_dispatch:
+```
+
+---
+
 ## Roadmap
 
 - [x] Kotlin support

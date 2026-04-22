@@ -1,0 +1,84 @@
+name: 'Generate Jctx Context Report'
+description: 'Runs Jctx to generate a context report for a Java, Kotlin, or Python project.'
+
+inputs:
+  project-path:
+    description: 'Path to the project folder to analyse (relative to the repo root).'
+    required: false
+    default: '.'
+  output-format:
+    description: 'Output format: "txt" for plain text or "md" for Markdown.'
+    required: false
+    default: 'md'
+  slim:
+    description: 'Set to "true" to use slim mode (class names and method signatures only).'
+    required: false
+    default: 'false'
+  no-tree:
+    description: 'Set to "true" to omit the file-tree section from the report.'
+    required: false
+    default: 'false'
+  jctx-version:
+    description: 'Version of jctx to install (e.g. "2.1.0"). Leave blank to install the latest.'
+    required: false
+    default: ''
+
+outputs:
+  report-path:
+    description: 'Path to the generated report file.'
+    value: ${{ steps.run-jctx.outputs.report-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
+    - name: Cache pip packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-jctx-${{ inputs.jctx-version || 'latest' }}
+        restore-keys: |
+          ${{ runner.os }}-pip-jctx-
+
+    - name: Install Jctx
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.jctx-version }}" ]; then
+          pip install "jctx==${{ inputs.jctx-version }}"
+        else
+          pip install jctx
+        fi
+
+    - name: Run Jctx
+      id: run-jctx
+      shell: bash
+      run: |
+        FLAGS=""
+        if [ "${{ inputs.output-format }}" = "md" ]; then FLAGS="$FLAGS --md"; fi
+        if [ "${{ inputs.slim }}" = "true" ];          then FLAGS="$FLAGS --slim"; fi
+        if [ "${{ inputs.no-tree }}" = "true" ];       then FLAGS="$FLAGS --no-tree"; fi
+
+        PROJECT="${{ inputs.project-path }}"
+
+        echo "Running: jctx \"$PROJECT\" $FLAGS"
+        if ! jctx "$PROJECT" $FLAGS; then
+          echo "::error::Jctx failed to generate the context report. Make sure the project path is correct and jctx is installed."
+          exit 1
+        fi
+
+        # Determine output file path
+        EXT="txt"
+        if [ "${{ inputs.output-format }}" = "md" ]; then EXT="md"; fi
+        REPORT_PATH="${PROJECT%/}/context.$EXT"
+
+        if [ ! -f "$REPORT_PATH" ]; then
+          echo "::error::Expected report not found at '$REPORT_PATH'."
+          exit 1
+        fi
+
+        echo "report-path=$REPORT_PATH" >> "$GITHUB_OUTPUT"
+        echo "Report generated at: $REPORT_PATH"
