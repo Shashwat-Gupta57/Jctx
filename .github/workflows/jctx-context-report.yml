@@ -1,0 +1,209 @@
+# ============================================================
+# Jctx Context Report — GitHub Actions Workflow
+# ============================================================
+# Automatically generates a context report for your Java,
+# Kotlin, or Python project on every push and pull request.
+#
+# HOW TO USE IN YOUR OWN REPOSITORY
+# ----------------------------------
+# Copy this file to .github/workflows/jctx-context-report.yml
+# in your repository and adjust the inputs under "with:" below.
+#
+# REQUIRED PERMISSIONS
+# --------------------
+# - Artifact upload: no extra permissions needed.
+# - PR comments:     pull-requests: write  (set below)
+# - Commit report:   contents: write       (set COMMIT_REPORT secret/var to 'true')
+# ============================================================
+
+name: Jctx Context Report
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+  workflow_dispatch:
+
+# Minimal permissions by default.
+# `pull-requests: write` is needed only for PR comments.
+# `contents: write`      is needed only when COMMIT_REPORT is enabled.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  generate-context-report:
+    name: Generate Context Report
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Python & cache ───────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # Compute a weekly cache key so jctx is re-fetched at most once per
+      # week, picking up new releases automatically without manual invalidation.
+      - name: Compute cache week key
+        id: week
+        run: echo "key=$(date +%Y-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-jctx-${{ steps.week.outputs.key }}
+          restore-keys: |
+            ${{ runner.os }}-pip-jctx-
+
+      # ── 3. Install Jctx ────────────────────────────────────
+      - name: Install Jctx
+        run: pip install jctx
+
+      # ── 4. Generate the context report ────────────────────
+      #
+      # Customise the flags below to suit your project:
+      #   --md        → Markdown output  (context.md)
+      #   --slim      → Class names + method signatures only
+      #   --no-tree   → Omit file-tree section
+      #   --print     → Also print the full report to the Actions log
+      #                 (always enabled in CI for visibility)
+      #
+      # Set PROJECT_PATH to a sub-folder if your project is not
+      # at the repo root, e.g. PROJECT_PATH=./my-java-app
+      - name: Run Jctx
+        id: run-jctx
+        env:
+          PROJECT_PATH: ${{ vars.JCTX_PROJECT_PATH || '.' }}
+          OUTPUT_FORMAT: ${{ vars.JCTX_OUTPUT_FORMAT || 'md' }}
+          SLIM_MODE: ${{ vars.JCTX_SLIM_MODE || 'false' }}
+          NO_TREE: ${{ vars.JCTX_NO_TREE || 'false' }}
+        run: |
+          FLAGS="--print"
+          if [ "$OUTPUT_FORMAT" = "md" ]; then FLAGS="$FLAGS --md"; fi
+          if [ "$SLIM_MODE"     = "true" ]; then FLAGS="$FLAGS --slim"; fi
+          if [ "$NO_TREE"       = "true" ]; then FLAGS="$FLAGS --no-tree"; fi
+
+          echo "Running: jctx \"$PROJECT_PATH\" $FLAGS"
+          if ! jctx "$PROJECT_PATH" $FLAGS; then
+            echo "::error::Jctx failed. Check that the project path is correct and that it contains Java, Kotlin, or Python source files."
+            exit 1
+          fi
+
+          EXT="txt"
+          if [ "$OUTPUT_FORMAT" = "md" ]; then EXT="md"; fi
+          REPORT_PATH="${PROJECT_PATH%/}/context.$EXT"
+
+          if [ ! -f "$REPORT_PATH" ]; then
+            echo "::error::Expected report not found at '$REPORT_PATH'."
+            exit 1
+          fi
+
+          echo "report-path=$REPORT_PATH" >> "$GITHUB_OUTPUT"
+          echo "report-ext=$EXT"          >> "$GITHUB_OUTPUT"
+
+      # ── 5. Upload report as workflow artifact ──────────────
+      - name: Upload context report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jctx-context-report
+          path: ${{ steps.run-jctx.outputs.report-path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      # ── 6. Comment on PR (pull_request trigger only) ───────
+      - name: Comment report summary on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs   = require('fs');
+            const path = require('path');
+
+            const reportPath = '${{ steps.run-jctx.outputs.report-path }}';
+            const content    = fs.readFileSync(reportPath, 'utf8');
+
+            // Extract a short summary (first 3000 chars) so the comment stays readable.
+            const MAX = 3000;
+            const preview = content.length > MAX
+              ? content.slice(0, MAX) + '\n\n_…output truncated. Download the full report from the workflow artifacts._'
+              : content;
+
+            const runUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+
+            const body = [
+              '## 📋 Jctx Context Report',
+              '',
+              `> Generated for commit \`${{ github.sha }}\` — [View full run & artifact](${runUrl})`,
+              '',
+              '<details>',
+              '<summary>Click to expand report preview</summary>',
+              '',
+              '```',
+              preview,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            // Update existing comment if one already exists, otherwise create new.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner:      context.repo.owner,
+              repo:       context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c =>
+              c.user.login === 'github-actions[bot]' &&
+              c.body.startsWith('## 📋 Jctx Context Report')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner:      context.repo.owner,
+                repo:       context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              console.log('Updated existing PR comment.');
+            } else {
+              await github.rest.issues.createComment({
+                owner:        context.repo.owner,
+                repo:         context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+              console.log('Created new PR comment.');
+            }
+
+      # ── 7. Optional: commit report back to the repo ────────
+      # Disabled by default. Set the repository variable
+      # JCTX_COMMIT_REPORT to 'true' and grant `contents: write`
+      # permission to enable this step.
+      - name: Commit context report to repository
+        if: >
+          vars.JCTX_COMMIT_REPORT == 'true' &&
+          github.event_name == 'push'
+        env:
+          REPORT_PATH: ${{ steps.run-jctx.outputs.report-path }}
+          COMMIT_PATH: ${{ vars.JCTX_COMMIT_PATH || 'docs/context-report' }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p "$COMMIT_PATH"
+          cp "$REPORT_PATH" "$COMMIT_PATH/"
+
+          git add "$COMMIT_PATH/"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update Jctx context report [skip ci]"
+            git push
+          fi
